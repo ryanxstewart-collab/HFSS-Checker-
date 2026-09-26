@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scotland HFSS Barcode Checker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- HTML5 QR / Barcode Scanner CDN -->
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800 p-4 max-w-xl mx-auto">
+  <header class="text-center py-4">
+    <h1 class="text-2xl font-bold tracking-tight text-slate-900">Scotland HFSS Checker</h1>
+    <p class="text-sm text-slate-500">Scan product barcode to verify compliance under Scottish regulations</p>
+  </header>
+
+  <!-- Scanner Container -->
+  <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-4 p-4">
+    <div id="reader" class="w-full rounded-xl overflow-hidden bg-black aspect-square"></div>
+    <div class="mt-4 flex gap-2">
+      <button id="start-btn" onclick="startScanner()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl text-sm transition">
+        Open Camera
+      </button>
+      <button id="stop-btn" onclick="stopScanner()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium py-2.5 px-4 rounded-xl text-sm transition hidden">
+        Stop Camera
+      </button>
+    </div>
+
+    <!-- Manual Barcode Fallback -->
+    <div class="mt-4 pt-4 border-t border-slate-100 flex gap-2">
+      <input type="text" id="manual-barcode" placeholder="Or enter barcode manually..." class="flex-1 border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-blue-500">
+      <button onclick="lookupBarcode(document.getElementById('manual-barcode').value.trim())" class="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-medium">
+        Search
+      </button>
+    </div>
+  </div>
+
+  <!-- Status / Loading -->
+  <div id="status-card" class="hidden text-center p-4 bg-white rounded-2xl shadow-sm border border-slate-200 mb-4 text-sm text-slate-600 font-medium"></div>
+
+  <!-- Result Container -->
+  <div id="result-card" class="hidden bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4"></div>
+
+  <script>
+    let html5QrCode = null;
+
+    function startScanner() {
+      html5QrCode = new Html5Qrcode("reader");
+      const config = { fps: 10, qrbox: { width: 250, height: 150 } };
+      
+      html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess)
+        .then(() => {
+          document.getElementById('start-btn').classList.add('hidden');
+          document.getElementById('stop-btn').classList.remove('hidden');
+        })
+        .catch(err => alert("Camera permission error: " + err));
+    }
+
+    function stopScanner() {
+      if (html5QrCode) {
+        html5QrCode.stop().then(() => {
+          document.getElementById('start-btn').classList.remove('hidden');
+          document.getElementById('stop-btn').classList.add('hidden');
+        });
+      }
+    }
+
+    function onScanSuccess(decodedText) {
+      stopScanner();
+      lookupBarcode(decodedText);
+    }
+
+    async function lookupBarcode(barcode) {
+      if (!barcode) return;
+      const status = document.getElementById('status-card');
+      const resultCard = document.getElementById('result-card');
+      
+      status.classList.remove('hidden');
+      resultCard.classList.add('hidden');
+      status.innerText = `Searching Open Food Facts for barcode ${barcode}...`;
+
+      try {
+        const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`);
+        const data = await res.json();
+
+        if (data.status !== 1) {
+          status.innerText = `Product (${barcode}) not found in Open Food Facts. Please verify packaging label manually.`;
+          return;
+        }
+
+        status.classList.add('hidden');
+        displayResult(data.product);
+      } catch (err) {
+        status.innerText = "Error contacting product database: " + err.message;
+      }
+    }
+
+    function calculateNPM(nutr, isDrink = false) {
+      const energy_kj = parseFloat(nutr['energy-kj_100g'] || (nutr['energy-kcal_100g'] * 4.184) || 0);
+      const sat_fat = parseFloat(nutr['saturated-fat_100g'] || 0);
+      const sugars = parseFloat(nutr['sugars_100g'] || 0);
+      const salt = parseFloat(nutr['salt_100g'] || (nutr['sodium_100g'] * 2.5) || 0);
+      const sodium_mg = salt * 400;
+
+      const fvn_percent = parseFloat(nutr['fruits-vegetables-nuts-estimate-from-ingredients_100g'] || 0);
+      const fibre = parseFloat(nutr['fiber_100g'] || 0);
+      const protein = parseFloat(nutr['proteins_100g'] || 0);
+
+      // A Points
+      let a = 0;
+      [335, 670, 1005, 1340, 1675, 2010, 2345, 2680, 3015, 3350].forEach(v => { if (energy_kj > v) a++; });
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].forEach(v => { if (sat_fat > v) a++; });
+      [4.5, 9, 13.5, 18, 22.5, 27, 31, 36, 40, 45].forEach(v => { if (sugars > v) a++; });
+      [90, 180, 270, 360, 450, 540, 630, 720, 810, 900].forEach(v => { if (sodium_mg > v) a++; });
+
+      // C Points
+      let fvn_pts = fvn_percent > 80 ? 5 : (fvn_percent > 60 ? 2 : (fvn_percent > 40 ? 1 : 0));
+      let fibre_pts = 0;
+      [0.9, 1.9, 2.8, 3.7, 4.7].forEach(v => { if (fibre > v) fibre_pts++; });
+      let protein_pts = 0;
+      [1.6, 3.2, 4.8, 6.4, 8.0].forEach(v => { if (protein > v) protein_pts++; });
+
+      let c = fvn_pts + fibre_pts;
+      let proteinCounted = (a < 11 || fvn_pts === 5);
+      if (proteinCounted) c += protein_pts;
+
+      const score = a - c;
+      const isHfss = isDrink ? score >= 1 : score >= 4;
+
+      return { score, a, c, isHfss, energy_kj, sat_fat, sugars, salt, protein, fibre, fvn_percent, proteinCounted };
+    }
+
+    function displayResult(product) {
+      const resultCard = document.getElementById('result-card');
+      const isDrink = (product.categories_tags || []).some(cat => cat.includes('beverages') || cat.includes('drinks'));
+      const r = calculateNPM(product.nutriments || {}, isDrink);
+
+      const statusBg = r.isHfss ? 'bg-red-50 border-red-200 text-red-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800';
+      const badgeBg = r.isHfss ? 'bg-red-600 text-white' : 'bg-emerald-600 text-white';
+      const statusTitle = r.isHfss ? 'HFSS (Restricted in Scotland)' : 'Non-HFSS (Compliant)';
+
+      resultCard.innerHTML = `
+        <div class="flex items-start gap-4">
+          ${product.image_front_small_url ? `<img src="${product.image_front_small_url}" class="w-16 h-16 object-contain rounded-lg border bg-slate-50">` : ''}
+          <div>
+            <h2 class="font-bold text-slate-900 leading-tight">${product.product_name || 'Unknown Product'}</h2>
+            <p class="text-xs text-slate-500 mt-1">${product.brands || 'Brand unspecified'} | Barcode: ${product.code}</p>
+          </div>
+        </div>
+
+        <div class="p-4 rounded-xl border ${statusBg} flex items-center justify-between">
+          <div>
+            <span class="text-xs font-semibold uppercase tracking-wider block">Scottish Status</span>
+            <span class="font-bold text-base">${statusTitle}</span>
+          </div>
+          <div class="text-right">
+            <span class="text-xs font-semibold uppercase tracking-wider block">NPM Score</span>
+            <span class="font-bold text-2xl">${r.score}</span>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-100">
+          <div><strong>Type:</strong> ${isDrink ? 'Drink (Cutoff ≥1)' : 'Food (Cutoff ≥4)'}</div>
+          <div><strong>A Points:</strong> ${r.a}</div>
+          <div><strong>C Points:</strong> ${r.c} ${r.proteinCounted ? '' : '(Protein capped)'}</div>
+          <div><strong>Sugars (100g):</strong> ${r.sugars.toFixed(1)}g</div>
+          <div><strong>Sat Fat (100g):</strong> ${r.sat_fat.toFixed(1)}g</div>
+          <div><strong>Salt (100g):</strong> ${r.salt.toFixed(2)}g</div>
+        </div>
+      `;
+      resultCard.classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>
