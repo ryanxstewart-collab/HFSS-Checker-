@@ -5,13 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scotland HFSS Barcode Checker</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- HTML5 QR / Barcode Scanner CDN -->
   <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body class="bg-slate-100 min-h-screen text-slate-800 p-4 max-w-xl mx-auto">
   <header class="text-center py-4">
     <h1 class="text-2xl font-bold tracking-tight text-slate-900">Scotland HFSS Checker</h1>
-    <p class="text-sm text-slate-500">Scan product barcode to verify compliance under Scottish regulations</p>
+    <p class="text-sm text-slate-500">Scan barcodes to check compliance under Scottish regulations</p>
   </header>
 
   <!-- Scanner Container -->
@@ -26,16 +25,16 @@
       </button>
     </div>
 
-    <!-- Manual Barcode Fallback -->
+    <!-- Manual Barcode Input -->
     <div class="mt-4 pt-4 border-t border-slate-100 flex gap-2">
-      <input type="text" id="manual-barcode" placeholder="Or enter barcode manually..." class="flex-1 border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-blue-500">
+      <input type="text" id="manual-barcode" placeholder="Enter barcode manually..." class="flex-1 border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-blue-500">
       <button onclick="lookupBarcode(document.getElementById('manual-barcode').value.trim())" class="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-medium">
         Search
       </button>
     </div>
   </div>
 
-  <!-- Status / Loading -->
+  <!-- Loading / Status -->
   <div id="status-card" class="hidden text-center p-4 bg-white rounded-2xl shadow-sm border border-slate-200 mb-4 text-sm text-slate-600 font-medium"></div>
 
   <!-- Result Container -->
@@ -77,74 +76,101 @@
       
       status.classList.remove('hidden');
       resultCard.classList.add('hidden');
-      status.innerText = `Searching Open Food Facts for barcode ${barcode}...`;
+      status.innerText = `Searching database for barcode ${barcode}...`;
 
       try {
         const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`);
         const data = await res.json();
 
         if (data.status !== 1) {
-          status.innerText = `Product (${barcode}) not found in Open Food Facts. Please verify packaging label manually.`;
+          status.innerText = `Product (${barcode}) not found. Please verify packet label manually.`;
           return;
         }
 
         status.classList.add('hidden');
-        displayResult(data.product);
+        renderProduct(data.product);
       } catch (err) {
-        status.innerText = "Error contacting product database: " + err.message;
+        status.innerText = "Error: " + err.message;
       }
     }
 
-    function calculateNPM(nutr, isDrink = false) {
-      const energy_kj = parseFloat(nutr['energy-kj_100g'] || (nutr['energy-kcal_100g'] * 4.184) || 0);
-      const sat_fat = parseFloat(nutr['saturated-fat_100g'] || 0);
-      const sugars = parseFloat(nutr['sugars_100g'] || 0);
-      const salt = parseFloat(nutr['salt_100g'] || (nutr['sodium_100g'] * 2.5) || 0);
-      const sodium_mg = salt * 400;
-
-      const fvn_percent = parseFloat(nutr['fruits-vegetables-nuts-estimate-from-ingredients_100g'] || 0);
-      const fibre = parseFloat(nutr['fiber_100g'] || 0);
-      const protein = parseFloat(nutr['proteins_100g'] || 0);
+    function calculateNPM(data) {
+      const sodium_mg = (data.salt || 0) * 400;
 
       // A Points
       let a = 0;
-      [335, 670, 1005, 1340, 1675, 2010, 2345, 2680, 3015, 3350].forEach(v => { if (energy_kj > v) a++; });
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].forEach(v => { if (sat_fat > v) a++; });
-      [4.5, 9, 13.5, 18, 22.5, 27, 31, 36, 40, 45].forEach(v => { if (sugars > v) a++; });
+      [335, 670, 1005, 1340, 1675, 2010, 2345, 2680, 3015, 3350].forEach(v => { if (data.energy_kj > v) a++; });
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].forEach(v => { if (data.sat_fat > v) a++; });
+      [4.5, 9, 13.5, 18, 22.5, 27, 31, 36, 40, 45].forEach(v => { if (data.sugars > v) a++; });
       [90, 180, 270, 360, 450, 540, 630, 720, 810, 900].forEach(v => { if (sodium_mg > v) a++; });
 
       // C Points
-      let fvn_pts = fvn_percent > 80 ? 5 : (fvn_percent > 60 ? 2 : (fvn_percent > 40 ? 1 : 0));
+      let fvn_pts = data.fvn > 80 ? 5 : (data.fvn > 60 ? 2 : (data.fvn > 40 ? 1 : 0));
       let fibre_pts = 0;
-      [0.9, 1.9, 2.8, 3.7, 4.7].forEach(v => { if (fibre > v) fibre_pts++; });
+      [0.9, 1.9, 2.8, 3.7, 4.7].forEach(v => { if (data.fibre > v) fibre_pts++; });
       let protein_pts = 0;
-      [1.6, 3.2, 4.8, 6.4, 8.0].forEach(v => { if (protein > v) protein_pts++; });
+      [1.6, 3.2, 4.8, 6.4, 8.0].forEach(v => { if (data.protein > v) protein_pts++; });
 
       let c = fvn_pts + fibre_pts;
-      let proteinCounted = (a < 11 || fvn_pts === 5);
+      const proteinCounted = (a < 11 || fvn_pts === 5);
       if (proteinCounted) c += protein_pts;
 
       const score = a - c;
-      const isHfss = isDrink ? score >= 1 : score >= 4;
+      const isHfss = data.isDrink ? score >= 1 : score >= 4;
 
-      return { score, a, c, isHfss, energy_kj, sat_fat, sugars, salt, protein, fibre, fvn_percent, proteinCounted };
+      return { score, a, c, isHfss, proteinCounted };
     }
 
-    function displayResult(product) {
-      const resultCard = document.getElementById('result-card');
+    function renderProduct(product) {
+      const n = product.nutriments || {};
       const isDrink = (product.categories_tags || []).some(cat => cat.includes('beverages') || cat.includes('drinks'));
-      const r = calculateNPM(product.nutriments || {}, isDrink);
 
-      const statusBg = r.isHfss ? 'bg-red-50 border-red-200 text-red-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800';
-      const badgeBg = r.isHfss ? 'bg-red-600 text-white' : 'bg-emerald-600 text-white';
-      const statusTitle = r.isHfss ? 'HFSS (Restricted in Scotland)' : 'Non-HFSS (Compliant)';
+      // Robust field extraction
+      const energy_kj = parseFloat(n['energy-kj_100g'] || (n['energy-kcal_100g'] * 4.184) || n['energy_100g'] || 0);
+      const sat_fat = parseFloat(n['saturated-fat_100g'] || n['saturated_fat_100g'] || 0);
+      const sugars = parseFloat(n['sugars_100g'] || n['sugar_100g'] || 0);
+      
+      let salt = parseFloat(n['salt_100g'] || 0);
+      if (!salt && n['sodium_100g']) {
+        const sod = parseFloat(n['sodium_100g']);
+        salt = sod > 50 ? (sod / 1000) * 2.5 : sod * 2.5;
+      }
 
+      // Check all spelling variations of fibre
+      const fibre = parseFloat(n['fiber_100g'] ?? n['fibre_100g'] ?? n['fiber'] ?? n['fibre'] ?? 0);
+      const protein = parseFloat(n['proteins_100g'] || n['protein_100g'] || 0);
+      const fvn = parseFloat(n['fruits-vegetables-nuts-estimate-from-ingredients_100g'] || 0);
+
+      const parsedValues = {
+        name: product.product_name || 'Unknown Product',
+        brand: product.brands || '',
+        code: product.code,
+        img: product.image_front_small_url,
+        isDrink,
+        energy_kj: Math.round(energy_kj),
+        sat_fat: Number(sat_fat.toFixed(2)),
+        sugars: Number(sugars.toFixed(2)),
+        salt: Number(salt.toFixed(2)),
+        fibre: Number(fibre.toFixed(2)),
+        protein: Number(protein.toFixed(2)),
+        fvn: Math.round(fvn)
+      };
+
+      updateUI(parsedValues);
+    }
+
+    function updateUI(v) {
+      const res = calculateNPM(v);
+      const statusBg = res.isHfss ? 'bg-red-50 border-red-200 text-red-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800';
+      const statusTitle = res.isHfss ? 'HFSS (Restricted in Scotland)' : 'Non-HFSS (Compliant)';
+
+      const resultCard = document.getElementById('result-card');
       resultCard.innerHTML = `
         <div class="flex items-start gap-4">
-          ${product.image_front_small_url ? `<img src="${product.image_front_small_url}" class="w-16 h-16 object-contain rounded-lg border bg-slate-50">` : ''}
+          ${v.img ? `<img src="${v.img}" class="w-16 h-16 object-contain rounded-lg border bg-slate-50">` : ''}
           <div>
-            <h2 class="font-bold text-slate-900 leading-tight">${product.product_name || 'Unknown Product'}</h2>
-            <p class="text-xs text-slate-500 mt-1">${product.brands || 'Brand unspecified'} | Barcode: ${product.code}</p>
+            <h2 class="font-bold text-slate-900 leading-tight">${v.name}</h2>
+            <p class="text-xs text-slate-500 mt-1">${v.brand} | Barcode: ${v.code}</p>
           </div>
         </div>
 
@@ -155,20 +181,74 @@
           </div>
           <div class="text-right">
             <span class="text-xs font-semibold uppercase tracking-wider block">NPM Score</span>
-            <span class="font-bold text-2xl">${r.score}</span>
+            <span class="font-bold text-2xl">${res.score}</span>
           </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-100">
-          <div><strong>Type:</strong> ${isDrink ? 'Drink (Cutoff ≥1)' : 'Food (Cutoff ≥4)'}</div>
-          <div><strong>A Points:</strong> ${r.a}</div>
-          <div><strong>C Points:</strong> ${r.c} ${r.proteinCounted ? '' : '(Protein capped)'}</div>
-          <div><strong>Sugars (100g):</strong> ${r.sugars.toFixed(1)}g</div>
-          <div><strong>Sat Fat (100g):</strong> ${r.sat_fat.toFixed(1)}g</div>
-          <div><strong>Salt (100g):</strong> ${r.salt.toFixed(2)}g</div>
-        </div>
+        ${v.fibre === 0 ? `
+          <div class="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+            ⚠️ <strong>Fibre is 0g in database:</strong> Database often misses fibre. If the packet lists fibre, enter it below to correct the score.
+          </div>
+        ` : ''}
+
+        <!-- Live Adjustment Form -->
+        <details class="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs">
+          <summary class="font-semibold text-slate-700 cursor-pointer">Verify / Adjust Values (Per 100g)</summary>
+          <div class="grid grid-cols-2 gap-3 mt-3">
+            <div>
+              <label class="block text-slate-500 mb-1">Energy (kJ)</label>
+              <input type="number" id="inp-energy" value="${v.energy_kj}" class="w-full border rounded-lg p-1.5 bg-white">
+            </div>
+            <div>
+              <label class="block text-slate-500 mb-1">Sat Fat (g)</label>
+              <input type="number" step="0.1" id="inp-satfat" value="${v.sat_fat}" class="w-full border rounded-lg p-1.5 bg-white">
+            </div>
+            <div>
+              <label class="block text-slate-500 mb-1">Sugars (g)</label>
+              <input type="number" step="0.1" id="inp-sugars" value="${v.sugars}" class="w-full border rounded-lg p-1.5 bg-white">
+            </div>
+            <div>
+              <label class="block text-slate-500 mb-1">Salt (g)</label>
+              <input type="number" step="0.01" id="inp-salt" value="${v.salt}" class="w-full border rounded-lg p-1.5 bg-white">
+            </div>
+            <div>
+              <label class="block text-slate-500 mb-1 font-bold text-blue-700">Fibre (g)</label>
+              <input type="number" step="0.1" id="inp-fibre" value="${v.fibre}" class="w-full border rounded-lg p-1.5 bg-white border-blue-400">
+            </div>
+            <div>
+              <label class="block text-slate-500 mb-1">Protein (g)</label>
+              <input type="number" step="0.1" id="inp-protein" value="${v.protein}" class="w-full border rounded-lg p-1.5 bg-white">
+            </div>
+            <div class="col-span-2">
+              <label class="block text-slate-500 mb-1">Type</label>
+              <select id="inp-isdrink" class="w-full border rounded-lg p-1.5 bg-white">
+                <option value="false" ${!v.isDrink ? 'selected' : ''}>Food (Threshold: Score ≥ 4)</option>
+                <option value="true" ${v.isDrink ? 'selected' : ''}>Drink (Threshold: Score ≥ 1)</option>
+              </select>
+            </div>
+          </div>
+          <button onclick="recalculateFromInputs()" class="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg text-xs">
+            Recalculate Score
+          </button>
+        </details>
       `;
+
+      // Store in memory for recalculation
+      window.currentProduct = v;
       resultCard.classList.remove('hidden');
+    }
+
+    function recalculateFromInputs() {
+      const v = window.currentProduct;
+      v.energy_kj = parseFloat(document.getElementById('inp-energy').value) || 0;
+      v.sat_fat = parseFloat(document.getElementById('inp-satfat').value) || 0;
+      v.sugars = parseFloat(document.getElementById('inp-sugars').value) || 0;
+      v.salt = parseFloat(document.getElementById('inp-salt').value) || 0;
+      v.fibre = parseFloat(document.getElementById('inp-fibre').value) || 0;
+      v.protein = parseFloat(document.getElementById('inp-protein').value) || 0;
+      v.isDrink = document.getElementById('inp-isdrink').value === 'true';
+
+      updateUI(v);
     }
   </script>
 </body>
